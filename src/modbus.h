@@ -72,6 +72,10 @@ MODBUS_BEGIN_DECLS
 #define MODBUS_FC_REPORT_SLAVE_ID          0x11
 #define MODBUS_FC_MASK_WRITE_REGISTER      0x16
 #define MODBUS_FC_WRITE_AND_READ_REGISTERS 0x17
+#define MODBUS_FC_READ_XINJE_COILS         0x1e
+#define MODBUS_FC_WRITE_XINJE_COILS        0x1f
+#define MODBUS_FC_READ_XINJE_REGISTERS     0x20
+#define MODBUS_FC_WRITE_XINJE_REGISTERS    0x21
 
 #define MODBUS_BROADCAST_ADDRESS 0
 
@@ -217,13 +221,18 @@ MODBUS_API int modbus_set_debug(modbus_t *ctx, int flag);
 
 MODBUS_API const char *modbus_strerror(int errnum);
 
+/* TODO: XinJE actually should yield uint16_t values, and nb should count 2 byte words */
 MODBUS_API int modbus_read_bits(modbus_t *ctx, int addr, int nb, uint8_t *dest);
+MODBUS_API int modbus_read_xinje_bits(modbus_t *ctx, uint32_t addr, int nb, uint8_t *dest);
 MODBUS_API int modbus_read_input_bits(modbus_t *ctx, int addr, int nb, uint8_t *dest);
 MODBUS_API int modbus_read_registers(modbus_t *ctx, int addr, int nb, uint16_t *dest);
+MODBUS_API int modbus_read_xinje_registers(modbus_t *ctx, uint32_t addr, int nb, uint32_t *dest);
 MODBUS_API int
 modbus_read_input_registers(modbus_t *ctx, int addr, int nb, uint16_t *dest);
 MODBUS_API int modbus_write_bit(modbus_t *ctx, int coil_addr, int status);
+MODBUS_API int modbus_write_xinje_bit(modbus_t *ctx, uint32_t coil_addr, int status);
 MODBUS_API int modbus_write_register(modbus_t *ctx, int reg_addr, const uint16_t value);
+MODBUS_API int modbus_write_xinje_register(modbus_t *ctx, uint32_t reg_addr, const uint32_t value);
 MODBUS_API int modbus_write_bits(modbus_t *ctx, int addr, int nb, const uint8_t *data);
 MODBUS_API int
 modbus_write_registers(modbus_t *ctx, int addr, int nb, const uint16_t *data);

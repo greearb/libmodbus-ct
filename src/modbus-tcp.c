@@ -97,9 +97,8 @@ static int _modbus_set_slave(modbus_t *ctx, int slave)
     return 0;
 }
 
-/* Builds a TCP request header */
-static int _modbus_tcp_build_request_basis(
-    modbus_t *ctx, int function, int addr, int nb, uint8_t *req)
+static int _modbus_tcp_build_request_basis_xinje_read(
+    modbus_t *ctx, int function, uint32_t addr, int nb, uint8_t *req)
 {
     modbus_tcp_t *ctx_tcp = ctx->backend_data;
 
@@ -120,12 +119,148 @@ static int _modbus_tcp_build_request_basis(
 
     req[6] = ctx->slave;
     req[7] = function;
+
+    for (int i = 0; i < 4; i++) {
+        req[8 + i] = (addr >> ((3 - i) * 8)) & 0xff;
+    }
+    req[12] = nb >> 8;
+    req[13] = nb & 0x00ff;
+
+    return _MODBUS_TCP_XINJE_READ_PRESET_REQ_LENGTH;
+}
+
+static int _modbus_tcp_build_request_basis_xinje_write_coil(
+    modbus_t *ctx, uint32_t addr, int value, uint8_t *req)
+{
+    modbus_tcp_t *ctx_tcp = ctx->backend_data;
+
+    /* Increase transaction ID */
+    if (ctx_tcp->t_id < UINT16_MAX)
+        ctx_tcp->t_id++;
+    else
+        ctx_tcp->t_id = 0;
+    req[0] = ctx_tcp->t_id >> 8;
+    req[1] = ctx_tcp->t_id & 0x00ff;
+
+    /* Protocol Modbus */
+    req[2] = 0;
+    req[3] = 0;
+
+    /* Length will be defined later by set_req_length_tcp at offsets 4
+       and 5 */
+
+    req[6] = ctx->slave;
+    req[7] = MODBUS_FC_WRITE_XINJE_COILS;
+
+    for (int i = 0; i < 4; i++) {
+        req[8 + i] = (addr >> ((3 - i) * 8)) & 0xff;
+    }
+    req[12] = 0;
+    req[13] = 1; /* standard marker - number of words to follow */
+
+    /* words are 1 byte here */
+
+    req[14] = 1; /* number of bytes to follow (who knows why) */
+    req[15] = value; /* actual data to write to coil */
+
+    return _MODBUS_TCP_XINJE_WRITE_COIL_PRESET_REQ_LENGTH;
+}
+
+/* TODO: This is hard coded for 4 bytes. Instead, we should handle arbitrary 2 byte words. */
+static int _modbus_tcp_build_request_basis_xinje_write_reg(
+    modbus_t *ctx, uint32_t addr, uint32_t value, uint8_t *req)
+{
+    modbus_tcp_t *ctx_tcp = ctx->backend_data;
+
+    /* Increase transaction ID */
+    if (ctx_tcp->t_id < UINT16_MAX)
+        ctx_tcp->t_id++;
+    else
+        ctx_tcp->t_id = 0;
+    req[0] = ctx_tcp->t_id >> 8;
+    req[1] = ctx_tcp->t_id & 0x00ff;
+
+    /* Protocol Modbus */
+    req[2] = 0;
+    req[3] = 0;
+
+    /* Length will be defined later by set_req_length_tcp at offsets 4
+       and 5 */
+
+    req[6] = ctx->slave;
+    req[7] = MODBUS_FC_WRITE_XINJE_REGISTERS;
+
+    for (int i = 0; i < 4; i++) {
+        req[8 + i] = (addr >> ((3 - i) * 8)) & 0xff;
+    }
+    req[12] = 0;
+    req[13] = 2; /* two 16 bit words */
+
+    /* words are 1 byte here */
+
+    req[14] = 4; /* four bytes */
+
+    /* actual data to write to coil, byte order goes [ 1 0 3 2 ] */
+    req[15] = (value >> 8) & 0xff;
+    req[16] = value & 0xff;
+    req[17] = (value >> 24) & 0xff;
+    req[18] = (value >> 16) & 0xff;
+
+    return _MODBUS_TCP_XINJE_WRITE_REG_PRESET_REQ_LENGTH;
+}
+
+/* Builds a TCP request header */
+static int _modbus_tcp_build_request_basis_standard(
+    modbus_t *ctx, int function, uint32_t addr, uint32_t nb, uint8_t *req)
+{
+    modbus_tcp_t *ctx_tcp = ctx->backend_data;
+
+    /* Increase transaction ID */
+    if (ctx_tcp->t_id < UINT16_MAX)
+        ctx_tcp->t_id++;
+    else
+        ctx_tcp->t_id = 0;
+    req[0] = ctx_tcp->t_id >> 8;
+    req[1] = ctx_tcp->t_id & 0x00ff;
+
+    /* Protocol Modbus */
+    req[2] = 0;
+    req[3] = 0;
+
+    /* Length will be defined later by set_req_length_tcp at offsets 4
+       and 5 */
+
+    req[6] = ctx->slave;
+    req[7] = function;
+
     req[8] = addr >> 8;
     req[9] = addr & 0x00ff;
     req[10] = nb >> 8;
     req[11] = nb & 0x00ff;
 
     return _MODBUS_TCP_PRESET_REQ_LENGTH;
+}
+
+static int _modbus_tcp_build_request_basis(
+    modbus_t *ctx, int function, uint32_t addr, uint32_t nb, uint8_t *req) {
+    switch (function) {
+    case MODBUS_FC_READ_XINJE_COILS:
+    case MODBUS_FC_READ_XINJE_REGISTERS:
+        return _modbus_tcp_build_request_basis_xinje_read(ctx, function, addr, nb, req);
+        break;
+
+    case MODBUS_FC_WRITE_XINJE_COILS:
+        return _modbus_tcp_build_request_basis_xinje_write_coil(ctx, addr, nb, req);
+        break;
+
+    case MODBUS_FC_WRITE_XINJE_REGISTERS:
+        return _modbus_tcp_build_request_basis_xinje_write_reg(ctx, addr, nb, req);
+        break;
+
+    default:
+        return _modbus_tcp_build_request_basis_standard(ctx, function, addr, nb, req);
+        break;
+    }
 }
 
 /* Builds a TCP response header */

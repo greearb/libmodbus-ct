@@ -31,8 +31,9 @@ const unsigned int libmodbus_version_major = LIBMODBUS_VERSION_MAJOR;
 const unsigned int libmodbus_version_minor = LIBMODBUS_VERSION_MINOR;
 const unsigned int libmodbus_version_micro = LIBMODBUS_VERSION_MICRO;
 
-/* Max between RTU and TCP max adu length (so TCP) */
-#define MAX_MESSAGE_LENGTH 260
+/* Max between RTU and TCP max adu length (so TCP)
+   XinJE protocol can add up to 8 extra bytes (2 extra for addr + 6 for 8 byte word). */
+#define MAX_MESSAGE_LENGTH 266
 
 /* 3 steps are used to parse the query */
 typedef enum {
@@ -143,6 +144,22 @@ static unsigned int compute_response_length_from_request(modbus_t *ctx, uint8_t 
     case MODBUS_FC_READ_INPUT_REGISTERS:
         /* Header + 2 * nb values */
         length = 2 + 2 * (req[offset + 3] << 8 | req[offset + 4]);
+        break;
+    case MODBUS_FC_READ_XINJE_COILS:
+        /* TODO: better length calc */
+        length = 3;
+        break;
+    case MODBUS_FC_READ_XINJE_REGISTERS:
+        /* TODO: better length calc */
+        length = 6;
+        break;
+    case MODBUS_FC_WRITE_XINJE_COILS:
+        /* TODO: better length calc */
+        length = 7;
+        break;
+    case MODBUS_FC_WRITE_XINJE_REGISTERS:
+        /* TODO: better length calc */
+        length = 7;
         break;
     case MODBUS_FC_READ_EXCEPTION_STATUS:
         length = 3;
@@ -300,7 +317,13 @@ static uint8_t compute_meta_length_after_function(int function, msg_type_t msg_t
         case MODBUS_FC_MASK_WRITE_REGISTER:
             length = 6;
             break;
+        case MODBUS_FC_WRITE_XINJE_COILS:
+        case MODBUS_FC_WRITE_XINJE_REGISTERS:
+            length = 6;
+            break;
         default:
+            /* Typically this is the case where the function code is immediately
+               followed by a read byte count. */
             length = 1;
         }
     }
@@ -331,7 +354,9 @@ compute_data_length_after_meta(modbus_t *ctx, uint8_t *msg, msg_type_t msg_type)
         /* MSG_CONFIRMATION */
         if (function <= MODBUS_FC_READ_INPUT_REGISTERS ||
             function == MODBUS_FC_REPORT_SLAVE_ID ||
-            function == MODBUS_FC_WRITE_AND_READ_REGISTERS) {
+            function == MODBUS_FC_WRITE_AND_READ_REGISTERS ||
+            function == MODBUS_FC_READ_XINJE_COILS ||
+            function == MODBUS_FC_READ_XINJE_REGISTERS) {
             length = msg[ctx->backend->header_length + 1];
         } else {
             length = 0;
@@ -671,6 +696,9 @@ static int check_confirmation(modbus_t *ctx, uint8_t *req, uint8_t *rsp, int rsp
             /* 1 Write functions & others */
             req_nb_value = rsp_nb_value = 1;
             break;
+        /* TODO: we probably want to actually handle these rather than fudging the response */
+        case MODBUS_FC_READ_XINJE_COILS:
+        case MODBUS_FC_READ_XINJE_REGISTERS:
         default:
             /* 1 Write functions & others */
             req_nb_value = rsp_nb_value = 1;
@@ -679,6 +707,9 @@ static int check_confirmation(modbus_t *ctx, uint8_t *req, uint8_t *rsp, int rsp
 
         if ((req_nb_value == rsp_nb_value) && (resp_addr_ok == TRUE) &&
             (resp_data_ok == TRUE)) {
+            if (ctx->debug) {
+                printf("rsp NB val is %d\n", rsp_nb_value);
+            }
             rc = rsp_nb_value;
         } else {
             if (ctx->debug) {
@@ -1220,6 +1251,49 @@ static int read_io_status(modbus_t *ctx, int function, int addr, int nb, uint8_t
     return rc;
 }
 
+static int xinje_read_io_status(modbus_t *ctx, int function, uint32_t addr, int nb, uint8_t *dest)
+{
+    int rc;
+    int req_length;
+    uint8_t req[_MIN_XINJE_READ_REQ_LENGTH];
+    uint8_t rsp[MAX_MESSAGE_LENGTH];
+
+    if (nb > MODBUS_MAX_READ_REGISTERS) {
+        if (ctx->debug) {
+            fprintf(stderr,
+                    "ERROR Too many registers requested (%d > %d)\n",
+                    nb,
+                    MODBUS_MAX_READ_REGISTERS);
+        }
+        errno = EMBMDATA;
+        return -1;
+    }
+
+    req_length = ctx->backend->build_request_basis(ctx, function, addr, nb, req);
+
+    rc = send_msg(ctx, req, req_length);
+    if (rc > 0) {
+        unsigned int offset;
+        int i;
+
+        rc = _modbus_receive_msg(ctx, rsp, MSG_CONFIRMATION);
+        if (rc == -1)
+            return -1;
+
+        rc = check_confirmation(ctx, req, rsp, rc);
+        if (rc == -1)
+            return -1;
+
+        offset = ctx->backend->header_length;
+
+        for (i = 0; i < rc; i++) {
+            dest[i] = rsp[offset + 2 + i];
+        }
+    }
+
+    return rc;
+}
+
 /* Reads the boolean status of bits and sets the array elements
    in the destination to TRUE or FALSE (single bits). */
 int modbus_read_bits(modbus_t *ctx, int addr, int nb, uint8_t *dest)
@@ -1243,6 +1317,36 @@ int modbus_read_bits(modbus_t *ctx, int addr, int nb, uint8_t *dest)
     }
 
     rc = read_io_status(ctx, MODBUS_FC_READ_COILS, addr, nb, dest);
+
+    if (rc == -1)
+        return -1;
+    else
+        return nb;
+}
+
+/* Reads the boolean status of bits and sets the array elements
+   in the destination to TRUE or FALSE (single bits). */
+int modbus_read_xinje_bits(modbus_t *ctx, uint32_t addr, int nb, uint8_t *dest)
+{
+    int rc;
+
+    if (ctx == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (nb > MODBUS_MAX_READ_BITS) {
+        if (ctx->debug) {
+            fprintf(stderr,
+                    "ERROR Too many bits requested (%d > %d)\n",
+                    nb,
+                    MODBUS_MAX_READ_BITS);
+        }
+        errno = EMBMDATA;
+        return -1;
+    }
+
+    rc = xinje_read_io_status(ctx, MODBUS_FC_READ_XINJE_COILS, addr, nb, dest);
 
     if (rc == -1)
         return -1;
@@ -1280,7 +1384,7 @@ int modbus_read_input_bits(modbus_t *ctx, int addr, int nb, uint8_t *dest)
 }
 
 /* Reads the data from a remote device and put that data into an array */
-static int read_registers(modbus_t *ctx, int function, int addr, int nb, uint16_t *dest)
+static int read_registers(modbus_t *ctx, int function, uint32_t addr, int nb, uint16_t *dest)
 {
     int rc;
     int req_length;
@@ -1324,6 +1428,54 @@ static int read_registers(modbus_t *ctx, int function, int addr, int nb, uint16_
     return rc;
 }
 
+/* Reads the data from a remote device and put that data into an array */
+static int xinje_read_registers(modbus_t *ctx, int function, uint32_t addr, int nb, uint32_t *dest)
+{
+    int rc;
+    int req_length;
+    uint8_t req[_MIN_XINJE_READ_REQ_LENGTH];
+    uint8_t rsp[MAX_MESSAGE_LENGTH];
+
+    if (nb > MODBUS_MAX_READ_REGISTERS) {
+        if (ctx->debug) {
+            fprintf(stderr,
+                    "ERROR Too many registers requested (%d > %d)\n",
+                    nb,
+                    MODBUS_MAX_READ_REGISTERS);
+        }
+        errno = EMBMDATA;
+        return -1;
+    }
+
+    req_length = ctx->backend->build_request_basis(ctx, function, addr, nb, req);
+
+    rc = send_msg(ctx, req, req_length);
+    if (rc > 0) {
+        unsigned int offset;
+        int i;
+
+        rc = _modbus_receive_msg(ctx, rsp, MSG_CONFIRMATION);
+        if (rc == -1)
+            return -1;
+
+        rc = check_confirmation(ctx, req, rsp, rc);
+        if (rc == -1)
+            return -1;
+
+        offset = ctx->backend->header_length;
+
+        for (i = 0; i < rc; i++) {
+            /* bit order lo to hi is [ 1 0 3 2 ] */
+            dest[i] = (rsp[offset + 2 + (i * 4)] << 8)
+                    | (rsp[offset + 3 + (i * 4)])
+                    | (rsp[offset + 4 + (i * 4)] << 24)
+                    | (rsp[offset + 5 + (i * 4)] << 16);
+        }
+    }
+
+    return rc;
+}
+
 /* Reads the holding registers of remote device and put the data into an
    array */
 int modbus_read_registers(modbus_t *ctx, int addr, int nb, uint16_t *dest)
@@ -1347,6 +1499,33 @@ int modbus_read_registers(modbus_t *ctx, int addr, int nb, uint16_t *dest)
     }
 
     status = read_registers(ctx, MODBUS_FC_READ_HOLDING_REGISTERS, addr, nb, dest);
+    return status;
+}
+
+
+/* Reads the holding registers of remote device and put the data into an
+   array */
+int modbus_read_xinje_registers(modbus_t *ctx, uint32_t addr, int nb, uint32_t *dest)
+{
+    int status;
+
+    if (ctx == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (nb > MODBUS_MAX_READ_REGISTERS) {
+        if (ctx->debug) {
+            fprintf(stderr,
+                    "ERROR Too many registers requested (%d > %d)\n",
+                    nb,
+                    MODBUS_MAX_READ_REGISTERS);
+        }
+        errno = EMBMDATA;
+        return -1;
+    }
+
+    status = xinje_read_registers(ctx, MODBUS_FC_READ_XINJE_REGISTERS, addr, nb, dest);
     return status;
 }
 
@@ -1406,6 +1585,40 @@ static int write_single(modbus_t *ctx, int function, int addr, const uint16_t va
     return rc;
 }
 
+/* Write a value to the specified register of the remote device.
+   Used by write_bit and write_register */
+static int write_single_xinje(modbus_t *ctx, int function, uint32_t addr, const int value)
+{
+    int rc;
+    int req_length;
+    uint8_t req[function == MODBUS_FC_WRITE_XINJE_COILS
+                ? _MIN_XINJE_WRITE_COIL_REQ_LENGTH
+                : function == MODBUS_FC_WRITE_XINJE_REGISTERS
+                  ? _MIN_XINJE_WRITE_REG_REQ_LENGTH
+                  : _MIN_REQ_LENGTH];
+
+    if (ctx == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    req_length = ctx->backend->build_request_basis(ctx, function, addr, (int) value, req);
+
+    rc = send_msg(ctx, req, req_length);
+    if (rc > 0) {
+        /* Used by write_bit and write_register */
+        uint8_t rsp[MAX_MESSAGE_LENGTH];
+
+        rc = _modbus_receive_msg(ctx, rsp, MSG_CONFIRMATION);
+        if (rc == -1)
+            return -1;
+
+        rc = check_confirmation(ctx, req, rsp, rc);
+    }
+
+    return rc;
+}
+
 /* Turns ON or OFF a single bit of the remote device */
 int modbus_write_bit(modbus_t *ctx, int addr, int status)
 {
@@ -1417,6 +1630,17 @@ int modbus_write_bit(modbus_t *ctx, int addr, int status)
     return write_single(ctx, MODBUS_FC_WRITE_SINGLE_COIL, addr, status ? 0xFF00 : 0);
 }
 
+/* Turns ON or OFF a single bit of the remote device */
+int modbus_write_xinje_bit(modbus_t *ctx, uint32_t addr, int status)
+{
+    if (ctx == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return write_single_xinje(ctx, MODBUS_FC_WRITE_XINJE_COILS, addr, status);
+}
+
 /* Writes a value in one register of the remote device */
 int modbus_write_register(modbus_t *ctx, int addr, const uint16_t value)
 {
@@ -1426,6 +1650,17 @@ int modbus_write_register(modbus_t *ctx, int addr, const uint16_t value)
     }
 
     return write_single(ctx, MODBUS_FC_WRITE_SINGLE_REGISTER, addr, value);
+}
+
+/* Writes a value in one register of the remote device */
+int modbus_write_xinje_register(modbus_t *ctx, uint32_t addr, const uint32_t value)
+{
+    if (ctx == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return write_single_xinje(ctx, MODBUS_FC_WRITE_XINJE_REGISTERS, addr, value);
 }
 
 /* Write the bits of the array in the remote device */

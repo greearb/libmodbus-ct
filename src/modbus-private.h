@@ -32,6 +32,9 @@ MODBUS_BEGIN_DECLS
  * - HEADER_LENGTH_RTU (1) + function (1) + address (2) + number (2) + CRC (2)
  */
 #define _MIN_REQ_LENGTH 12
+#define _MIN_XINJE_READ_REQ_LENGTH 14
+#define _MIN_XINJE_WRITE_COIL_REQ_LENGTH 16
+#define _MIN_XINJE_WRITE_REG_REQ_LENGTH 19
 
 #define _REPORT_SLAVE_ID 180
 
@@ -40,6 +43,8 @@ MODBUS_BEGIN_DECLS
 /* Timeouts in microsecond (0.5 s) */
 #define _RESPONSE_TIMEOUT 500000
 #define _BYTE_TIMEOUT     500000
+
+#define _is_xinje_fc(fc) ((fc) >= 0x1e && (fc) <= 0x21)
 
 typedef enum {
     _MODBUS_BACKEND_TYPE_RTU = 0,
@@ -73,7 +78,7 @@ typedef struct _modbus_backend {
     unsigned int max_adu_length;
     int (*set_slave)(modbus_t *ctx, int slave);
     int (*build_request_basis)(
-        modbus_t *ctx, int function, int addr, int nb, uint8_t *req);
+        modbus_t *ctx, int function, uint32_t addr, uint32_t nb, uint8_t *req);
     int (*build_response_basis)(sft_t *sft, uint8_t *rsp);
     int (*prepare_response_tid)(const uint8_t *req, int *req_length);
     int (*send_msg_pre)(uint8_t *req, int req_length);
