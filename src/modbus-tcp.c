@@ -100,6 +100,7 @@ static int _modbus_set_slave(modbus_t *ctx, int slave)
 static int _modbus_tcp_build_request_basis_xinje_read(
     modbus_t *ctx, int function, uint32_t addr, int nb, uint8_t *req)
 {
+    int i;
     modbus_tcp_t *ctx_tcp = ctx->backend_data;
 
     /* Increase transaction ID */
@@ -120,7 +121,7 @@ static int _modbus_tcp_build_request_basis_xinje_read(
     req[6] = ctx->slave;
     req[7] = function;
 
-    for (int i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++) {
         req[8 + i] = (addr >> ((3 - i) * 8)) & 0xff;
     }
     req[12] = nb >> 8;
@@ -132,6 +133,7 @@ static int _modbus_tcp_build_request_basis_xinje_read(
 static int _modbus_tcp_build_request_basis_xinje_write_coil(
     modbus_t *ctx, uint32_t addr, int value, uint8_t *req)
 {
+    int i;
     modbus_tcp_t *ctx_tcp = ctx->backend_data;
 
     /* Increase transaction ID */
@@ -152,7 +154,7 @@ static int _modbus_tcp_build_request_basis_xinje_write_coil(
     req[6] = ctx->slave;
     req[7] = MODBUS_FC_WRITE_XINJE_COILS;
 
-    for (int i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++) {
         req[8 + i] = (addr >> ((3 - i) * 8)) & 0xff;
     }
     req[12] = 0;
@@ -170,6 +172,7 @@ static int _modbus_tcp_build_request_basis_xinje_write_coil(
 static int _modbus_tcp_build_request_basis_xinje_write_reg(
     modbus_t *ctx, uint32_t addr, uint32_t value, uint8_t *req)
 {
+    int i;
     modbus_tcp_t *ctx_tcp = ctx->backend_data;
 
     /* Increase transaction ID */
@@ -190,7 +193,7 @@ static int _modbus_tcp_build_request_basis_xinje_write_reg(
     req[6] = ctx->slave;
     req[7] = MODBUS_FC_WRITE_XINJE_REGISTERS;
 
-    for (int i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++) {
         req[8 + i] = (addr >> ((3 - i) * 8)) & 0xff;
     }
     req[12] = 0;
